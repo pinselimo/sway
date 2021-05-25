@@ -47,12 +47,12 @@ static struct wlr_surface *layer_surface_at(struct sway_output *output,
 }
 
 static bool surface_is_xdg_popup(struct wlr_surface *surface) {
-    if (wlr_surface_is_xdg_surface(surface)) {
-        struct wlr_xdg_surface *xdg_surface =
-            wlr_xdg_surface_from_wlr_surface(surface);
-        return xdg_surface->role == WLR_XDG_SURFACE_ROLE_POPUP;
-    }
-    return false;
+	if (wlr_surface_is_xdg_surface(surface)) {
+		struct wlr_xdg_surface *xdg_surface =
+			wlr_xdg_surface_from_wlr_surface(surface);
+		return xdg_surface->role == WLR_XDG_SURFACE_ROLE_POPUP;
+	}
+	return false;
 }
 
 static struct wlr_surface *layer_surface_popup_at(struct sway_output *output,
@@ -473,7 +473,7 @@ static void handle_touch_down(struct wl_listener *listener, void *data) {
 					event->touch_id, sx, sy);
 
 			if (focused_node) {
-			    seat_set_focus(seat, focused_node);
+				seat_set_focus(seat, focused_node);
 			}
 		}
 	} else if (!cursor->simulating_pointer_from_touch &&
@@ -898,59 +898,237 @@ static void handle_request_pointer_set_cursor(struct wl_listener *listener,
 			event->hotspot_y, focused_client);
 }
 
+static bool gesture_binding_exists(struct sway_cursor *cursor, uint32_t gesture) {
+	struct sway_seat *seat = cursor->seat;
+	bool input_inhibited = seat->exclusive_client != NULL;
+
+	list_t *bindings = config->current_mode->gesture_bindings;
+
+	const uint32_t MASK_FINGERS = FINGERS_FOUR | FINGERS_THREE;
+	const uint32_t MASK_DIRECTION = GESTURE_UP | GESTURE_DOWN | GESTURE_LEFT | GESTURE_RIGHT;
+
+	for (int i = 0; i < bindings->length; ++i) {
+		struct sway_gesture_binding *binding = bindings->items[i];
+
+		bool fingers_defined = binding->gesture & MASK_FINGERS || !(binding->gesture & GESTURE_PINCH);
+
+		if (fingers_defined && binding->gesture != (gesture & ~MASK_DIRECTION)) {
+			continue;
+		} else if (!fingers_defined && binding->gesture != (gesture & ~(MASK_DIRECTION | MASK_FINGERS))) {
+			continue;
+		}
+		if (!(binding->flags & BINDING_LOCKED) && input_inhibited) {
+			continue;
+		}
+
+		return true;
+	}
+	return false;
+}
+
+static bool execute_binding(struct sway_cursor *cursor, uint32_t gesture, uint32_t amplitude) {
+	struct sway_seat *seat = cursor->seat;
+	bool input_inhibited = seat->exclusive_client != NULL;
+
+	list_t *bindings = config->current_mode->gesture_bindings;
+	struct sway_gesture_binding *matched_binding = NULL;
+
+	const uint32_t MASK_FINGERS = FINGERS_FOUR | FINGERS_THREE;
+	const uint32_t MASK_DIRECTION = GESTURE_UP | GESTURE_DOWN | GESTURE_LEFT | GESTURE_RIGHT;
+
+	for (int i = 0; i < bindings->length; ++i) {
+		struct sway_gesture_binding *binding = bindings->items[i];
+		if (binding->flags & BINDING_NOREPEAT && cursor->gesture_repeating) {
+			continue;
+		}
+
+		bool fingers_defined = binding->gesture & MASK_FINGERS || !(binding->gesture & GESTURE_PINCH);
+		bool direction_defined = binding->gesture & MASK_DIRECTION;
+		if (fingers_defined && direction_defined && binding->gesture != gesture) {
+			continue;
+		} else if (direction_defined && !fingers_defined && binding->gesture != (gesture & ~MASK_FINGERS)) {
+			continue;
+		} else if (fingers_defined && !direction_defined && binding->gesture != (gesture & ~MASK_DIRECTION)) {
+			continue;
+		} else if (!(fingers_defined || direction_defined) && binding->gesture != (gesture & ~(MASK_DIRECTION | MASK_FINGERS))) {
+			continue;
+		}
+		bool binding_locked = binding->flags & BINDING_LOCKED;
+		if (!binding_locked && input_inhibited) {
+			continue;
+		}
+
+		if (amplitude < binding->threshold) {
+			continue;
+		}
+
+		matched_binding = binding;
+		cursor->gesture_repeating = true;
+
+		if (binding_locked == input_inhibited) {
+			break;
+		}
+	}
+
+	if (matched_binding) {
+		struct sway_binding *dummy_binding =
+			calloc(1, sizeof(struct sway_binding));
+		dummy_binding->type = BINDING_GESTURE;
+		dummy_binding->flags = matched_binding->flags;
+		dummy_binding->input = matched_binding->input;
+		dummy_binding->command = matched_binding->command;
+
+		seat_execute_command(seat, dummy_binding);
+		free(dummy_binding);
+
+		return true;
+	} else {
+		return false;
+	}
+}
+
 static void handle_pointer_pinch_begin(struct wl_listener *listener, void *data) {
 	struct sway_cursor *cursor = wl_container_of(
 			listener, cursor, pinch_begin);
 	struct wlr_event_pointer_pinch_begin *event = data;
-	wlr_pointer_gestures_v1_send_pinch_begin(
-			cursor->pointer_gestures, cursor->seat->wlr_seat,
-			event->time_msec, event->fingers);
+
+	uint32_t gesture = GESTURE_PINCH;
+	if (event->fingers == 3) {
+		gesture |= FINGERS_THREE;
+	} else if (event->fingers == 4) {
+		gesture |= FINGERS_FOUR;
+	}
+
+	if (gesture_binding_exists(cursor, gesture)) {
+		cursor->gesture_repeating = false;
+	} else {
+		wlr_pointer_gestures_v1_send_pinch_begin(
+				cursor->pointer_gestures, cursor->seat->wlr_seat,
+				event->time_msec, event->fingers);
+	}
 }
 
 static void handle_pointer_pinch_update(struct wl_listener *listener, void *data) {
 	struct sway_cursor *cursor = wl_container_of(
 			listener, cursor, pinch_update);
 	struct wlr_event_pointer_pinch_update *event = data;
-	wlr_pointer_gestures_v1_send_pinch_update(
-			cursor->pointer_gestures, cursor->seat->wlr_seat,
-			event->time_msec, event->dx, event->dy,
-			event->scale, event->rotation);
+
+	uint32_t gesture = GESTURE_PINCH;
+	if (event->fingers == 3) {
+		gesture |= FINGERS_THREE;
+	} else if (event->fingers == 4) {
+		gesture |= FINGERS_FOUR;
+	}
+
+	int amplitude = 0;
+	if (fabs(event->scale) > fabs(event->rotation)) {
+		if (event->scale > 0) {
+			gesture |= GESTURE_OUT;
+			amplitude = event->scale;
+		} else {
+			gesture |= GESTURE_IN;
+			amplitude = event->scale;
+		}
+	} else {
+		if (event->rotation > 0) {
+			gesture |= GESTURE_CLOCKWISE;
+			amplitude = event->rotation;
+		} else {
+			gesture |= GESTURE_COUNTERCLOCKWISE;
+			amplitude = event->rotation;
+		}
+	}
+
+
+	if (!execute_binding(cursor, gesture, amplitude)) {
+		wlr_pointer_gestures_v1_send_pinch_update(
+				cursor->pointer_gestures, cursor->seat->wlr_seat,
+				event->time_msec, event->dx, event->dy,
+				event->scale, event->rotation);
+	}
 }
 
 static void handle_pointer_pinch_end(struct wl_listener *listener, void *data) {
 	struct sway_cursor *cursor = wl_container_of(
 			listener, cursor, pinch_end);
 	struct wlr_event_pointer_pinch_end *event = data;
-	wlr_pointer_gestures_v1_send_pinch_end(
-			cursor->pointer_gestures, cursor->seat->wlr_seat,
-			event->time_msec, event->cancelled);
+
+	if (cursor->gesture_repeating) {
+		wlr_pointer_gestures_v1_send_pinch_end(
+				cursor->pointer_gestures, cursor->seat->wlr_seat,
+				event->time_msec, event->cancelled);
+	}
 }
 
 static void handle_pointer_swipe_begin(struct wl_listener *listener, void *data) {
 	struct sway_cursor *cursor = wl_container_of(
 			listener, cursor, swipe_begin);
 	struct wlr_event_pointer_swipe_begin *event = data;
-	wlr_pointer_gestures_v1_send_swipe_begin(
-			cursor->pointer_gestures, cursor->seat->wlr_seat,
-			event->time_msec, event->fingers);
+
+	uint32_t gesture = GESTURE_SWIPE;
+	if (event->fingers == 3) {
+		gesture |= FINGERS_THREE;
+	} else if (event->fingers == 4) {
+		gesture |= FINGERS_FOUR;
+	}
+
+	if (gesture_binding_exists(cursor, gesture)) {
+		cursor->gesture_repeating = false;
+	} else {
+		wlr_pointer_gestures_v1_send_swipe_begin(
+				cursor->pointer_gestures, cursor->seat->wlr_seat,
+				event->time_msec, event->fingers);
+	}
 }
 
 static void handle_pointer_swipe_update(struct wl_listener *listener, void *data) {
 	struct sway_cursor *cursor = wl_container_of(
 			listener, cursor, swipe_update);
 	struct wlr_event_pointer_swipe_update *event = data;
-	wlr_pointer_gestures_v1_send_swipe_update(
-			cursor->pointer_gestures, cursor->seat->wlr_seat,
-			event->time_msec, event->dx, event->dy);
+
+	uint32_t gesture = GESTURE_SWIPE;
+	if (event->fingers == 3) {
+		gesture |= FINGERS_THREE;
+	} else if (event->fingers == 4) {
+		gesture |= FINGERS_FOUR;
+	}
+
+	int amplitude = 0;
+	if (fabs(event->dy) > fabs(event->dx)) {
+		if (event->dy > 0) {
+			gesture |= GESTURE_UP;
+			amplitude = event->dy;
+		} else {
+			gesture |= GESTURE_DOWN;
+			amplitude = event->dy;
+		}
+	} else {
+		if (event->dx > 0) {
+			gesture |= GESTURE_RIGHT;
+			amplitude = event->dx;
+		} else {
+			gesture |= GESTURE_LEFT;
+			amplitude = event->dx;
+		}
+	}
+
+	if (!execute_binding(cursor, gesture, amplitude)) {
+		wlr_pointer_gestures_v1_send_swipe_update(
+				cursor->pointer_gestures, cursor->seat->wlr_seat,
+				event->time_msec, event->dx, event->dy);
+	}
 }
 
 static void handle_pointer_swipe_end(struct wl_listener *listener, void *data) {
 	struct sway_cursor *cursor = wl_container_of(
 			listener, cursor, swipe_end);
 	struct wlr_event_pointer_swipe_end *event = data;
-	wlr_pointer_gestures_v1_send_swipe_end(
-			cursor->pointer_gestures, cursor->seat->wlr_seat,
-			event->time_msec, event->cancelled);
+
+	if (cursor->gesture_repeating) {
+		wlr_pointer_gestures_v1_send_swipe_end(
+				cursor->pointer_gestures, cursor->seat->wlr_seat,
+				event->time_msec, event->cancelled);
+	}
 }
 
 static void handle_image_surface_destroy(struct wl_listener *listener,
