@@ -450,6 +450,26 @@ runtime.
 [--locked] [--input-device=<device>] [--no-warn] [Group<1-4>+]<code> <command>
 	is also available for binding with key/button codes instead of key/button names.
 
+*bindgesture* [--threshold=<threshold>] [--fingers=<fingers>] [--no-repeat] [--locked] [--no-warn] <gesture>:<direction> <command>
+	Binds a touchpad <gesture> to execute the sway command _command_.
+	Supported gestures are _swipe_ and _pinch_. In case of a _swipe_ the _direction_ can be either of _up_, _down_, _left_ or _right_.
+	For a _pinch_ valid values for _direction_ are _in_, _out_, _clockwise_ or _counterclockwise_.
+
+	Setting the _--threshold_ value adjusts the amplitude at which the command is triggered. The default _threshold_ value is _5_ but any floating value greater _0_ can be set.
+
+	The _--fingers_ flag can be used to specify the amount of fingers triggering the gesture. Valid values for _fingers_ are _3_ and _4_. This flag will be ignored for _pinch_ gesture bindings.
+
+	Unless the flag _--no-repeat_ is set, the command will be run
+	repeatedly while the gesture is continued and above _threshold_.
+
+	Unless the flag _--locked_ is set, the command will not be run when a
+	screen locking program is active. If there is a matching binding with
+	and without _--locked_, the one with will be preferred when locked and the
+	one without will be preferred when unlocked.
+
+	By default, if you overwrite a binding, swaynag will give you a warning. To
+	silence this, use the _--no-warn_ flag.
+
 *bindswitch* [--locked] [--no-warn] [--reload] <switch>:<state> <command>
 	Binds <switch> to execute the sway command _command_ on state changes.
 	Supported switches are _lid_ (laptop lid) and _tablet_ (tablet mode)
