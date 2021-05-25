@@ -31,7 +31,8 @@ enum binding_input_type {
 	BINDING_KEYSYM,
 	BINDING_MOUSECODE,
 	BINDING_MOUSESYM,
-	BINDING_SWITCH
+	BINDING_SWITCH,
+	BINDING_GESTURE
 };
 
 enum binding_flags {
@@ -80,6 +81,38 @@ struct sway_switch_binding {
 };
 
 /**
+ * Touchpad Gesture
+ */
+enum gesture {
+	GESTURE_SWIPE = 1 << 0,
+	GESTURE_PINCH = 1 << 1,
+	// Constants for swipes
+	GESTURE_UP = 1 << 2,
+	GESTURE_DOWN = 1 << 3,
+	GESTURE_LEFT = 1 << 4,
+	GESTURE_RIGHT = 1 << 5,
+	// Constants for pinches
+	GESTURE_IN = 1 << 2,
+	GESTURE_OUT = 1 << 3,
+	GESTURE_CLOCKWISE = 1 << 4,
+	GESTURE_COUNTERCLOCKWISE = 1 << 5,
+	// Amount of fingers for both
+	FINGERS_THREE = 1 << 6,
+	FINGERS_FOUR = 1 << 7
+};
+
+/**
+ * A touchpad gesture binding and an associated command.
+ */
+struct sway_gesture_binding {
+	uint32_t gesture;
+	float threshold;
+	char *input;
+	uint32_t flags;
+	char *command;
+};
+
+/**
  * Focus on window activation.
  */
 enum sway_fowa {
@@ -98,6 +131,7 @@ struct sway_mode {
 	list_t *keycode_bindings;
 	list_t *mouse_bindings;
 	list_t *switch_bindings;
+	list_t *gesture_bindings;
 	bool pango;
 };
 
@@ -680,6 +714,8 @@ int workspace_output_cmp_workspace(const void *a, const void *b);
 void free_sway_binding(struct sway_binding *sb);
 
 void free_switch_binding(struct sway_switch_binding *binding);
+
+void free_gesture_binding(struct sway_gesture_binding *binding);
 
 void seat_execute_command(struct sway_seat *seat, struct sway_binding *binding);
 
