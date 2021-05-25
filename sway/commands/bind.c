@@ -31,12 +31,39 @@ void free_sway_binding(struct sway_binding *binding) {
 	free(binding);
 }
 
+void free_gesture_binding(struct sway_gesture_binding *binding) {
+	if (!binding) {
+		return;
+	}
+	free(binding->input);
+	free(binding->command);
+	free(binding);
+}
+
 void free_switch_binding(struct sway_switch_binding *binding) {
 	if (!binding) {
 		return;
 	}
 	free(binding->command);
 	free(binding);
+}
+
+/**
+ * Returns true if the bindings have the same gesture type and direction combinations.
+ */
+static bool binding_gesture_compare(struct sway_gesture_binding *binding_a,
+		struct sway_gesture_binding *binding_b) {
+	if (binding_a->gesture != binding_b->gesture) {
+		return false;
+	}
+	if (strcmp(binding_a->input, binding_b->input) != 0) {
+		return false;
+	}
+	if ((binding_a->flags & BINDING_LOCKED) !=
+			(binding_b->flags & BINDING_LOCKED)) {
+		return false;
+	}
+	return true;
 }
 
 /**
@@ -207,6 +234,59 @@ static struct cmd_results *identify_key(const char* name, bool first_key,
 	return NULL;
 }
 
+static struct cmd_results *gesture_binding_add(
+		struct sway_gesture_binding *binding, const char *bindtype,
+		const char *gesture, bool warn) {
+	list_t *mode_bindings = config->current_mode->gesture_bindings;
+	// overwrite the binding if it already exists
+	bool overwritten = false;
+	for (int i = 0; i < mode_bindings->length; ++i) {
+		struct sway_gesture_binding *config_binding = mode_bindings->items[i];
+		if (binding_gesture_compare(binding, config_binding)) {
+			sway_log(SWAY_INFO, "Overwriting binding `%s` to `%s` from `%s`",
+					gesture, binding->command, config_binding->command);
+			if (warn) {
+				config_add_swaynag_warning("Overwriting binding "
+						"`%s` to `%s` from `%s`",
+						gesture, binding->command,
+						config_binding->command);
+			}
+			free_gesture_binding(config_binding);
+			mode_bindings->items[i] = binding;
+			overwritten = true;
+		}
+	}
+
+	if (!overwritten) {
+		list_add(mode_bindings, binding);
+		sway_log(SWAY_DEBUG, "%s - Bound %s to command `%s`",
+				bindtype, gesture, binding->command);
+	}
+
+	return cmd_results_new(CMD_SUCCESS, NULL);
+}
+
+static struct cmd_results *gesture_binding_remove(
+		struct sway_gesture_binding *binding, const char *bindtype,
+		const char *gesture) {
+	list_t *mode_bindings = config->current_mode->gesture_bindings;
+	for (int i = 0; i < mode_bindings->length; ++i) {
+		struct sway_gesture_binding *config_binding = mode_bindings->items[i];
+		if (binding_gesture_compare(binding, config_binding)) {
+			free_gesture_binding(config_binding);
+			free_gesture_binding(binding);
+			list_del(mode_bindings, i);
+			sway_log(SWAY_DEBUG, "%s - Unbound %s switch",
+					bindtype, gesture);
+			return cmd_results_new(CMD_SUCCESS, NULL);
+		}
+	}
+
+	free_gesture_binding(binding);
+	return cmd_results_new(CMD_FAILURE, "Could not find switch binding `%s`",
+			gesture);
+}
+
 static struct cmd_results *switch_binding_add(
 		struct sway_switch_binding *binding, const char *bindtype,
 		const char *switchcombo, bool warn) {
@@ -219,7 +299,7 @@ static struct cmd_results *switch_binding_add(
 			sway_log(SWAY_INFO, "Overwriting binding '%s' to `%s` from `%s`",
 					switchcombo, binding->command, config_binding->command);
 			if (warn) {
-				config_add_swaynag_warning("Overwriting binding"
+				config_add_swaynag_warning("Overwriting binding" // FIXME: Space after 'binding'
 						"'%s' to `%s` from `%s`",
 						switchcombo, binding->command,
 						config_binding->command);
@@ -436,7 +516,7 @@ static struct cmd_results *cmd_bindsym_or_bindcode(int argc, char **argv,
 		// Identify the key and possibly change binding->type
 		uint32_t key_val = 0;
 		error = identify_key(split->items[i], binding->keys->length == 0,
-				     &key_val, &binding->type);
+					 &key_val, &binding->type);
 		if (error) {
 			free_sway_binding(binding);
 			list_free(split);
@@ -491,6 +571,129 @@ static struct cmd_results *cmd_bindsym_or_bindcode(int argc, char **argv,
 	return binding_add(binding, mode_bindings, bindtype, argv[0], warn);
 }
 
+struct cmd_results *cmd_bind_or_unbind_gesture(int argc, char **argv,
+		bool unbind) {
+	int minargs = 2;
+	char *bindtype = "bindgesture";
+	if (unbind) {
+		minargs--;
+		bindtype = "unbindgesture";
+	}
+
+	struct cmd_results *error = NULL;
+	if ((error = checkarg(argc, bindtype, EXPECTED_AT_LEAST, minargs))) {
+		return error;
+	}
+	struct sway_gesture_binding *binding = calloc(1, sizeof(struct sway_gesture_binding));
+	if (!binding) {
+		return cmd_results_new(CMD_FAILURE, "Unable to allocate binding");
+	}
+	binding->input = strdup("*");
+	binding->flags = 0;
+	binding->gesture = 0;
+	binding->threshold = SWAY_DEFAULT_GESTURE_THRESHOLD;
+
+	bool warn = true;
+
+	// Handle flags
+	while (argc > 0) {
+		if (strcmp("--locked", argv[0]) == 0) {
+			binding->flags |= BINDING_LOCKED;
+		} else if (strcmp("--no-warn", argv[0]) == 0) {
+			warn = false;
+		} else if (strncmp("--input-device=", argv[0],
+					strlen("--input-device=")) == 0) {
+			free(binding->input);
+			binding->input = strdup(argv[0] + strlen("--input-device="));
+		} else if (strncmp("--threshold=", argv[0],
+					strlen("--threshold=")) == 0) {
+			binding->threshold = atof(argv[0] + strlen("--threshold="));
+		} else if (strncmp("--fingers=", argv[0],
+					strlen("--fingers=")) == 0) {
+			int fingers = (argv[0] + strlen("--fingers="))[0] - '0';
+			if (fingers == 3) {
+				binding->gesture |= FINGERS_THREE;
+			} else if (fingers == 4) {
+				binding->gesture |= FINGERS_FOUR;
+			}
+		} else if (strcmp("--no-repeat", argv[0]) == 0) {
+			binding->flags |= BINDING_NOREPEAT;
+		} else {
+			break;
+		}
+		argv++;
+		argc--;
+	}
+
+	if (argc < minargs) {
+		free_gesture_binding(binding);
+		return cmd_results_new(CMD_FAILURE,
+				"Invalid %s command (expected at least %i "
+				"non-option arguments, got %i)", bindtype, minargs, argc);
+	}
+
+	list_t *split = split_string(argv[0], ":");
+	if (split->length != 2) {
+		free_gesture_binding(binding);
+		list_free_items_and_destroy(split);
+		return cmd_results_new(CMD_FAILURE,
+				"Invalid %s command (expected binding with the form "
+				"<gesture>:<direction>)", bindtype);
+	}
+	if (strcmp(split->items[0], "swipe") == 0) {
+		binding->gesture |= GESTURE_SWIPE;
+	} else if (strcmp(split->items[0], "pinch") == 0) {
+		binding->gesture |= GESTURE_PINCH;
+	} else {
+		error = cmd_results_new(CMD_FAILURE,
+				"Invalid %s command (expected gesture binding: "
+				"unknown gesture '%s')", bindtype, split->items[0]);
+	}
+	if (!error && binding->gesture & GESTURE_SWIPE) {
+		if (strcmp(split->items[1], "up") == 0) {
+			binding->gesture |= GESTURE_UP;
+		} else if (strcmp(split->items[1], "down") == 0) {
+			binding->gesture |= GESTURE_DOWN;
+		} else if (strcmp(split->items[1], "left") == 0) {
+			binding->gesture |= GESTURE_LEFT;
+		} else if (strcmp(split->items[1], "right") == 0) {
+			binding->gesture |= GESTURE_RIGHT;
+		} else {
+			error = cmd_results_new(CMD_FAILURE,
+					"Invalid %s command "
+					"(expected gesture direction: unknown direction '%s')",
+					bindtype, split->items[1]);
+		}
+	} else if (!error) {
+		if (strcmp(split->items[1], "in") == 0) {
+			binding->gesture |= GESTURE_IN;
+		} else if (strcmp(split->items[1], "out") == 0) {
+			binding->gesture |= GESTURE_OUT;
+		} else if (strcmp(split->items[1], "clockwise") == 0) {
+			binding->gesture |= GESTURE_CLOCKWISE;
+		} else if (strcmp(split->items[1], "counterclockwise") == 0) {
+			binding->gesture |= GESTURE_COUNTERCLOCKWISE;
+		} else {
+			error = cmd_results_new(CMD_FAILURE,
+					"Invalid %s command "
+					"(expected gesture direction: "
+					"unknown direction '%s' for `%s` gesture)",
+					bindtype, split->items[1], split->items[0]);
+		}
+	}
+	list_free_items_and_destroy(split);
+	if (error) {
+		free_gesture_binding(binding);
+		return error;
+	}
+
+	if (unbind) {
+		return gesture_binding_remove(binding, bindtype, argv[0]);
+	}
+	binding->command = join_args(argv + 1, argc - 1);
+	return gesture_binding_add(binding, bindtype, argv[0], warn);
+}
+
 struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 		bool unbind) {
 	int minargs = 2;
@@ -527,7 +730,7 @@ struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 	}
 
 	if (argc < minargs) {
-		free(binding);
+		free(binding); // FIXME: Use free_switch_binding
 		return cmd_results_new(CMD_FAILURE,
 				"Invalid %s command (expected at least %d "
 				"non-option arguments, got %d)", bindtype, minargs, argc);
@@ -538,7 +741,7 @@ struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 		free_switch_binding(binding);
 		return cmd_results_new(CMD_FAILURE,
 				"Invalid %s command (expected binding with the form "
-				"<switch>:<state>)", bindtype, argc);
+				"<switch>:<state>)", bindtype, argc); // FIXME: Argc not used
 	}
 	if (strcmp(split->items[0], "tablet") == 0) {
 		binding->type = WLR_SWITCH_TYPE_TABLET_MODE;
@@ -561,7 +764,7 @@ struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 		return cmd_results_new(CMD_FAILURE,
 				"Invalid %s command "
 				"(expected switch state: unknown state %d)",
-				bindtype, split->items[0]);
+				bindtype, split->items[0]); // FIXME: Show actual erroneous input
 	}
 	list_free_items_and_destroy(split);
 
@@ -594,6 +797,14 @@ struct cmd_results *cmd_bindswitch(int argc, char **argv) {
 
 struct cmd_results *cmd_unbindswitch(int argc, char **argv) {
 	return cmd_bind_or_unbind_switch(argc, argv, true);
+}
+
+struct cmd_results *cmd_bindgesture(int argc, char **argv) {
+	return cmd_bind_or_unbind_gesture(argc, argv, false);
+}
+
+struct cmd_results *cmd_unbindgesture(int argc, char **argv) {
+	return cmd_bind_or_unbind_gesture(argc, argv, true);
 }
 
 /**

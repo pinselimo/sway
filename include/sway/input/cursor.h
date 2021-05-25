@@ -15,6 +15,8 @@
 #define SWAY_SCROLL_LEFT KEY_MAX + 3
 #define SWAY_SCROLL_RIGHT KEY_MAX + 4
 
+#define SWAY_DEFAULT_GESTURE_THRESHOLD 10
+
 struct sway_cursor {
 	struct sway_seat *seat;
 	struct wlr_cursor *cursor;
