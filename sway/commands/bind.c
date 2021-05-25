@@ -539,7 +539,7 @@ struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 		list_free_items_and_destroy(split);
 		return cmd_results_new(CMD_FAILURE,
 				"Invalid %s command (expected binding with the form "
-				"<switch>:<state>)", bindtype, argc);
+				"<switch>:<state>)", bindtype);
 	}
 	if (strcmp(split->items[0], "tablet") == 0) {
 		binding->type = WLR_SWITCH_TYPE_TABLET_MODE;
@@ -548,7 +548,7 @@ struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 	} else {
 		error = cmd_results_new(CMD_FAILURE,
 				"Invalid %s command (expected switch binding: "
-				"unknown switch %s)", bindtype, split->items[0]);
+				"unknown switch '%s')", bindtype, split->items[0]);
 	}
 	if (!error) {
 		if (strcmp(split->items[1], "on") == 0) {
@@ -560,8 +560,8 @@ struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 		} else {
 			error = cmd_results_new(CMD_FAILURE,
 					"Invalid %s command "
-					"(expected switch state: unknown state %d)",
-					bindtype, split->items[0]);
+					"(expected switch state: unknown state '%s')",
+					bindtype, split->items[1]);
 		}
 	}
 
