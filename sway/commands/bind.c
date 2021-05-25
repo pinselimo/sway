@@ -436,7 +436,7 @@ static struct cmd_results *cmd_bindsym_or_bindcode(int argc, char **argv,
 		// Identify the key and possibly change binding->type
 		uint32_t key_val = 0;
 		error = identify_key(split->items[i], binding->keys->length == 0,
-				     &key_val, &binding->type);
+					 &key_val, &binding->type);
 		if (error) {
 			free_sway_binding(binding);
 			list_free(split);
@@ -536,6 +536,7 @@ struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 	list_t *split = split_string(argv[0], ":");
 	if (split->length != 2) {
 		free_switch_binding(binding);
+		list_free_items_and_destroy(split);
 		return cmd_results_new(CMD_FAILURE,
 				"Invalid %s command (expected binding with the form "
 				"<switch>:<state>)", bindtype, argc);
@@ -545,25 +546,30 @@ struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 	} else if (strcmp(split->items[0], "lid") == 0) {
 		binding->type = WLR_SWITCH_TYPE_LID;
 	} else {
-		free_switch_binding(binding);
-		return cmd_results_new(CMD_FAILURE,
+		error = cmd_results_new(CMD_FAILURE,
 				"Invalid %s command (expected switch binding: "
 				"unknown switch %s)", bindtype, split->items[0]);
 	}
-	if (strcmp(split->items[1], "on") == 0) {
-		binding->state = WLR_SWITCH_STATE_ON;
-	} else if (strcmp(split->items[1], "off") == 0) {
-		binding->state = WLR_SWITCH_STATE_OFF;
-	} else if (strcmp(split->items[1], "toggle") == 0) {
-		binding->state = WLR_SWITCH_STATE_TOGGLE;
-	} else {
-		free_switch_binding(binding);
-		return cmd_results_new(CMD_FAILURE,
-				"Invalid %s command "
-				"(expected switch state: unknown state %d)",
-				bindtype, split->items[0]);
+	if (!error) {
+		if (strcmp(split->items[1], "on") == 0) {
+			binding->state = WLR_SWITCH_STATE_ON;
+		} else if (strcmp(split->items[1], "off") == 0) {
+			binding->state = WLR_SWITCH_STATE_OFF;
+		} else if (strcmp(split->items[1], "toggle") == 0) {
+			binding->state = WLR_SWITCH_STATE_TOGGLE;
+		} else {
+			error = cmd_results_new(CMD_FAILURE,
+					"Invalid %s command "
+					"(expected switch state: unknown state %d)",
+					bindtype, split->items[0]);
+		}
 	}
+
 	list_free_items_and_destroy(split);
+	if (error) {
+		free_switch_binding(binding);
+		return error;
+	}
 
 	if (unbind) {
 		return switch_binding_remove(binding, bindtype, argv[0]);
