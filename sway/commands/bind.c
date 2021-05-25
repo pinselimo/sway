@@ -527,7 +527,7 @@ struct cmd_results *cmd_bind_or_unbind_switch(int argc, char **argv,
 	}
 
 	if (argc < minargs) {
-		free(binding);
+		free_switch_binding(binding);
 		return cmd_results_new(CMD_FAILURE,
 				"Invalid %s command (expected at least %d "
 				"non-option arguments, got %d)", bindtype, minargs, argc);
